@@ -6,18 +6,23 @@ import sys
 # Initialize Pygame
 pygame.init()
 
-# Set up the display
-WIDTH = 800
-HEIGHT = 600
+# Screen size: reasonable default for local testing, overridden by pygbag
+if "pygbag" in sys.argv[0]:  # Detect if running in pygbag
+    info = pygame.display.Info()
+    WIDTH = info.current_w  # Fullscreen for web
+    HEIGHT = info.current_h
+else:
+    WIDTH = 800  # Default for local testing
+    HEIGHT = 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Space Invaders")
 
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
-NEON_CYAN = (0, 255, 255)  # Added neon color for start and game over text
+NEON_CYAN = (0, 255, 255)
 
-# Load images
+# Load images with dynamic scaling
 def load_image(filename, scale_to=None, use_alpha=True):
     try:
         img = pygame.image.load(filename)
@@ -30,9 +35,9 @@ def load_image(filename, scale_to=None, use_alpha=True):
         print(f"Error loading {filename}: {e}")
         return pygame.Surface(scale_to or (100, 100), pygame.SRCALPHA if use_alpha else 0)
 
-player_img = load_image("player.png", (100, 60), True)
-enemy_img = load_image("enemy.png", (60, 60), True)
-bullet_img = load_image("bullet.png", (8, 20), True)
+player_img = load_image("player.png", (WIDTH // 8, HEIGHT // 10), True)
+enemy_img = load_image("enemy.png", (WIDTH // 13, HEIGHT // 10), True)
+bullet_img = load_image("bullet.png", (WIDTH // 100, HEIGHT // 30), True)
 explosion_sheet = load_image("explosion.png", None, True)
 background_img = load_image("space_background.jpg", (WIDTH, HEIGHT), False)
 
@@ -50,8 +55,8 @@ class Player(pygame.sprite.Sprite):
         self.image = player_img
         self.rect = self.image.get_rect()
         self.rect.centerx = WIDTH // 2
-        self.rect.bottom = HEIGHT - 10
-        self.speed = 5
+        self.rect.bottom = HEIGHT - HEIGHT // 60
+        self.speed = WIDTH // 160
 
     def update(self):
         keys = pygame.key.get_pressed()
@@ -73,14 +78,14 @@ class Enemy(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.x = random.randrange(WIDTH - self.rect.width)
         self.rect.y = random.randrange(-200, -80)
-        self.speed = random.randrange(1, 4)
+        self.speed = random.randrange(1, max(4, HEIGHT // 150))
 
     def update(self):
         self.rect.y += self.speed
         if self.rect.top > HEIGHT:
             self.rect.x = random.randrange(WIDTH - self.rect.width)
             self.rect.y = random.randrange(-200, -80)
-            self.speed = random.randrange(1, 4)
+            self.speed = random.randrange(1, max(4, HEIGHT // 150))
 
 # Bullet class
 class Bullet(pygame.sprite.Sprite):
@@ -90,7 +95,7 @@ class Bullet(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.centerx = x
         self.rect.bottom = y
-        self.speed = -10
+        self.speed = -HEIGHT // 60
 
     def update(self):
         self.rect.y += self.speed
@@ -108,10 +113,10 @@ class Explosion(pygame.sprite.Sprite):
                 explosion_sheet.subsurface((i * self.frame_width, 0, self.frame_width, self.frame_height))
                 for i in range(8)
             ]
-            self.frames = [pygame.transform.scale(frame, (80, 80)) for frame in self.frames]
+            self.frames = [pygame.transform.scale(frame, (WIDTH // 10, WIDTH // 10)) for frame in self.frames]
         except pygame.error as e:
             print(f"Error processing explosion frames: {e}")
-            self.frames = [pygame.Surface((80, 80), pygame.SRCALPHA) for _ in range(8)]
+            self.frames = [pygame.Surface((WIDTH // 10, WIDTH // 10), pygame.SRCALPHA) for _ in range(8)]
         self.frame = 0
         self.image = self.frames[self.frame]
         self.rect = self.image.get_rect()
@@ -152,39 +157,67 @@ def init_game():
 
 # Initial setup
 init_game()
-font = pygame.font.Font(None, 48)
+font = pygame.font.Font(None, HEIGHT // 15)
 clock = pygame.time.Clock()
+
+# Input handling for keyboard and touch
+def handle_input():
+    global game_state
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            return False, None, False
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                return False, None, False  # Exit with Esc
+            if event.key == pygame.K_RETURN:
+                if game_state == START:
+                    game_state = PLAYING
+                elif game_state == GAME_OVER:
+                    init_game()
+                    game_state = PLAYING
+                return True, None, False
+            elif event.key == pygame.K_SPACE and game_state == PLAYING:
+                return True, None, True
+        if event.type == pygame.FINGERDOWN or event.type == pygame.MOUSEBUTTONDOWN:
+            pos = event.pos if hasattr(event, 'pos') else (event.x * WIDTH, event.y * HEIGHT)
+            if game_state == START:
+                game_state = PLAYING
+            elif game_state == GAME_OVER:
+                init_game()
+                game_state = PLAYING
+            elif game_state == PLAYING:
+                return True, pos[0], True
+        if event.type == pygame.FINGERMOTION or event.type == pygame.MOUSEMOTION:
+            pos = event.pos if hasattr(event, 'pos') else (event.x * WIDTH, event.y * HEIGHT)
+            return True, pos[0], False
+    return True, None, False
 
 # Main game loop
 async def main():
     global score, game_state
     running = True
     while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_RETURN:  # Enter key
-                    if game_state == START:
-                        game_state = PLAYING
-                    elif game_state == GAME_OVER:
-                        init_game()  # Reset game
-                        game_state = PLAYING
-                elif event.key == pygame.K_SPACE and game_state == PLAYING:
-                    player.shoot()
+        running, touch_x, shoot = handle_input()
+        if not running:
+            break
+
+        # Update player position with touch or keyboard
+        if touch_x is not None and game_state == PLAYING:
+            player.rect.centerx = touch_x
+            player.rect.clamp_ip(screen.get_rect())
+        if shoot and game_state == PLAYING:
+            player.shoot()
 
         # State machine
         if game_state == START:
             screen.blit(background_img, (0, 0))
-            start_text = font.render("Start Game - Press Enter", True, NEON_CYAN)  # Changed to Neon Cyan
+            start_text = font.render("Start Game - Tap or Press Enter", True, NEON_CYAN)
             screen.blit(start_text, (WIDTH // 2 - start_text.get_width() // 2, HEIGHT // 2 - start_text.get_height() // 2))
 
         elif game_state == PLAYING:
-            # Update
             all_sprites.update()
             explosions.update()
 
-            # Check for collisions
             hits = pygame.sprite.groupcollide(enemies, bullets, True, True)
             for hit in hits:
                 score += 10
@@ -197,32 +230,30 @@ async def main():
                 all_sprites.add(enemy)
                 enemies.add(enemy)
 
-            # Check if player hit
             if pygame.sprite.spritecollide(player, enemies, False):
                 game_state = GAME_OVER
 
-            # Draw
             screen.blit(background_img, (0, 0))
             all_sprites.draw(screen)
             explosions.draw(screen)
-            score_text = font.render(f"Score: {score}", True, WHITE)  # Kept white
-            screen.blit(score_text, (10, 10))
+            score_text = font.render(f"Score: {score}", True, WHITE)
+            screen.blit(score_text, (WIDTH // 80, HEIGHT // 60))
 
         elif game_state == GAME_OVER:
             screen.blit(background_img, (0, 0))
-            game_over_text = font.render("Game Over", True, NEON_CYAN)  # Changed to Neon Cyan
-            score_text = font.render(f"Total Score: {score}", True, NEON_CYAN)  # Changed to Neon Cyan
-            play_again_text = font.render("Play Again - Press Enter", True, NEON_CYAN)  # Changed to Neon Cyan
-            screen.blit(game_over_text, (WIDTH // 2 - game_over_text.get_width() // 2, HEIGHT // 2 - 100))
+            game_over_text = font.render("Game Over", True, NEON_CYAN)
+            score_text = font.render(f"Total Score: {score}", True, NEON_CYAN)
+            play_again_text = font.render("Play Again - Tap or Press Enter", True, NEON_CYAN)
+            screen.blit(game_over_text, (WIDTH // 2 - game_over_text.get_width() // 2, HEIGHT // 2 - HEIGHT // 10))
             screen.blit(score_text, (WIDTH // 2 - score_text.get_width() // 2, HEIGHT // 2))
-            screen.blit(play_again_text, (WIDTH // 2 - play_again_text.get_width() // 2, HEIGHT // 2 + 100))
+            screen.blit(play_again_text, (WIDTH // 2 - play_again_text.get_width() // 2, HEIGHT // 2 + HEIGHT // 10))
 
         pygame.display.flip()
         clock.tick(60)
-        await asyncio.sleep(0)  # Yield to browser event loop
+        await asyncio.sleep(0)
 
     pygame.quit()
 
-# Entry point for pygbag
 if __name__ == "__main__":
     asyncio.run(main())
+    
